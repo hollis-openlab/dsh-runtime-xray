@@ -1,0 +1,4 @@
+# dsh-runtime-xray development patch layer.
+- insert:
+    - id: runtime-xray
+      name: '@deepseek-ai/dsh-runtime-xray'
