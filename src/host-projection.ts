@@ -1,18 +1,23 @@
 /** Pure projection from Loader-owned entries into the X-Ray snapshot model. */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { EffectEntity, PluginEntry, ServiceEntity } from './snapshot.ts'
+import type { EffectEntity, PluginEntry, ServiceEntity, SnapshotRelationship } from './snapshot.ts'
 
 /** Minimal Loader projection required by the Host collector. */
 export interface LoaderEntry {
   readonly id: string
   readonly disabled: boolean
   readonly options: { readonly group?: boolean; readonly name: string }
-  readonly fiber?: {
-    readonly state: number
-    readonly inject?: Record<string, unknown>
-    readonly getEffects?: () => readonly EffectMetaLike[]
-  }
+  readonly fiber?: FiberLike
+}
+
+/** Public Fiber relations used for lifecycle ownership projection. */
+export interface FiberLike {
+  readonly name?: string
+  readonly state: number
+  readonly parent?: { readonly fiber: FiberLike }
+  readonly inject?: Record<string, unknown>
+  readonly getEffects?: () => readonly EffectMetaLike[]
 }
 
 /** Public Cordis effect metadata used by the loader fiber projection. */
@@ -24,7 +29,7 @@ export interface EffectMetaLike {
 /** Public Cordis service-store projection used for service ownership facts. */
 export interface ServiceImplementationLike {
   readonly name: string
-  readonly fiber: { readonly name: string; readonly state: number }
+  readonly fiber: FiberLike
 }
 
 const FIBER_PHASE: Record<number, PluginEntry['phase']> = {
@@ -97,7 +102,7 @@ export function projectServiceEntities(
     .map(key => store[key])
     .filter((implementation): implementation is ServiceImplementationLike => implementation !== undefined)
   return implementations.map(implementation => {
-    const owner = entries.find(entry => entry.fiber === implementation.fiber)
+    const owner = entries.find(entry => entry.fiber !== undefined && withinFiber(implementation.fiber, entry.fiber))
     return {
       name: implementation.name,
       status: implementation.fiber.state === 2 ? 'available' : 'unknown',
@@ -105,8 +110,44 @@ export function projectServiceEntities(
         quality: 'exact' as const,
         code: 'loader-service-owner',
         sourceId: owner.id,
-        explanation: 'The public service registry points to a Fiber owned by this Loader entry.',
+        explanation: 'The public service registry points to a Fiber inside this Loader entry’s lifecycle subtree.',
       } }),
     }
   })
+}
+
+/** Infer service contributions only from explicit public ctx.provide labels. */
+export function inferServiceRelationships(
+  effects: readonly EffectEntity[],
+  services: readonly ServiceEntity[],
+): readonly SnapshotRelationship[] {
+  const names = new Set(services.map(service => service.name))
+  return effects.flatMap((effect) => {
+    const match = /^ctx\.provide\("([^"\\]+)"\)$/.exec(effect.label)
+    const serviceName = match?.[1]
+    const sourceId = effect.attribution?.sourceId
+    if (serviceName === undefined || sourceId === undefined || !names.has(serviceName)) return []
+    return [{
+      relationshipId: `inferred:${sourceId}->${serviceName}`,
+      kind: 'provides' as const,
+      fromId: sourceId,
+      toId: serviceName,
+      attribution: {
+        quality: 'inferred' as const,
+        code: 'effect-label-service',
+        sourceId,
+        explanation: `The public effect label names ctx.provide("${serviceName}"), but the service registry does not expose a direct Loader owner reference.`,
+      },
+    }]
+  })
+}
+
+function withinFiber(fiber: FiberLike, root: FiberLike): boolean {
+  let current = fiber
+  while (true) {
+    if (current === root) return true
+    const parent = current.parent?.fiber
+    if (parent === undefined || parent === current) return false
+    current = parent
+  }
 }

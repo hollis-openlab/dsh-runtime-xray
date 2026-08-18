@@ -1,39 +1,88 @@
+<div align="center">
+
 # dsh-runtime-xray
 
-`dsh-runtime-xray` is a read-only runtime inspection plugin for DeepSeek Harness. It explains the effective plugins, services, tools, prompt inputs, scopes, realms, and lifecycle state behind a live session without changing the runtime it observes.
+**让 DeepSeek Harness 把当前运行状态讲清楚。**
 
-The verified DSH revision and version policy are in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
-This repository contains the public runtime plugin and its user-facing compatibility documentation. Internal product requirements, acceptance records, release gates, and development skills remain in the private development repository.
+[简体中文](README.md) · [English](README.en.md)
 
-## Development
+![版本](https://img.shields.io/badge/version-0.1.0-4d6bfe?style=flat-square)
+![DSH](https://img.shields.io/badge/DeepSeek%20Harness-0.1.0--rc.7-4d6bfe?style=flat-square)
+![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522.19-339933?style=flat-square&logo=node.js&logoColor=white)
+![许可](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
 
-```sh
-pnpm install
-pnpm test
-pnpm typecheck
-pnpm build
-```
+</div>
 
-The private development target is DeepSeek Harness `0.1.0-rc.7` and Node.js `>=22.19.0` or `>=24`. Install the local package through the DSH plugin command, then enable it in a Web profile; the package declares the Host and Web Client halves in `package.json`.
+## 它解决什么问题
 
-## Install
+`dsh-runtime-xray` 是 DeepSeek Harness 的只读运行时检查插件。打开会话里的「透视」页面，可以查看当前真正生效的运行时底座、会话能力、模型输入和生命周期资源。
 
-Install the public GitHub bundle into the Web profile, then restart that profile:
+「轨迹」回答过去发生了什么；「透视」回答现在是什么状态。它不会修改配置、重载插件、执行命令或向模型增加工具。
+
+透视页按一条清晰的运行链组织信息：运行时底座 → Skill / 工具 → 模型上下文。服务属于 Host 内部运行底座，不会被误认为模型输入。
+
+## 主要能力
+
+| 能力 | 你能看到什么 |
+| --- | --- |
+| 分层导航 | 概览、运行时底座、会话能力和模型输入按运行层级浏览 |
+| 当前会话 | 这个会话实际可用的服务、Skill、工具、模型上下文和模型路由 |
+| 整个应用 | 所有会话共享的插件、服务与生命周期资源 |
+| 作用域继承 | 展示「整个应用 → 预设 → 当前会话」的覆盖顺序 |
+| 模型输入 | 统计系统指令段、运行时上下文、变量，并按 Harness、工具、应用、部署、Plan、UI 分组 |
+| 插件—服务网络 | 精确所有者关系用实线，来自明确 `ctx.provide` 标签的推断用虚线 |
+| 生命周期资源 | 按服务注册、子插件挂载、定时器、监听器和其他资源聚合；展开后查看来源和深度 |
+| 服务词典 | 原生 DSH 服务显示用户化名称和中英文作用气泡；未知服务保留原始 key 并使用安全兜底 |
+| 证据等级 | 精确、推断、不可用；不会把猜测伪装成事实 |
+| 故障隔离 | 一个检查域失败时，其他域仍然可用 |
+| 重新读取 | 手动采集一次当前状态；页面关闭时不会后台轮询 |
+| 下载诊断文件 | 下载当前画面的脱敏 JSON，不会重新采集 |
+| 中英双语 | 跟随 DSH Web 的语言设置实时切换，无需重载插件 |
+
+## 安装
 
 ```sh
 dsh plugin --profile web add "github:hollis-openlab/dsh-runtime-xray#main"
 dsh --profile web
 ```
 
-The plugin appears as a peer `透视` / `X-Ray` view beside Conversation and Trajectory. To remove it, open Settings → Plugins, select `dsh-runtime-xray`, and uninstall it; restart the profile after the change.
+重启 Web profile 后，在「对话」和「轨迹」旁边会出现「透视」。卸载时进入「设置 → 插件」，选择 `dsh-runtime-xray` 并移除，然后重启同一 profile。
 
-## Quick start
+## 使用
 
-Open any live session, click `透视`, and choose `当前会话` to inspect the effective Preset, model route, tools, prompt metadata, services, and effects. Choose `Host 运行时` to inspect shared Loader entries, services, and effects. Use the visible Refresh and Export controls when collecting a diagnostic snapshot.
+1. 打开一个会话，点击「透视」。
+2. 选择「当前会话」，沿着运行时底座、会话能力和模型输入查看当前会话。
+3. 打开「Skill」查看有效 Skill 目录；再打开「工具」查看模型可调用动作。
+4. 打开「模型上下文」，按数据类型和来源分组检查模型输入。
+5. 选择「整个应用」，检查插件—服务网络和聚合后的生命周期资源。
+6. 需要确认热更新后的状态时，点击「重新读取」。
+7. 需要提交问题证据时，点击「下载诊断文件」下载脱敏 JSON。
 
-## Configuration
+## 隐私与权限
 
-The Host gateway accepts these optional values under the plugin's `config` entry in `cordis.yml`:
+插件只读取当前 DSH 进程公开提供的运行时信息，不会连接任何外部服务，也不需要自己的 API Key、环境变量或可写数据目录。
+
+默认快照和诊断文件不会包含：
+
+- 凭据和环境变量值；
+- 提示词正文和运行时上下文正文；
+- 变量值、审批载荷和工具结果；
+- 可调用对象或任意插件配置；
+- 原始会话和运行时实体标识。
+
+导出标识会在单个文件内一致地匿名化，文件大小上限为 1 MiB。
+
+## 兼容性
+
+- DeepSeek Harness：`>=0.1.0-rc.7 <0.2.0`
+- Node.js：`>=22.19.0` 或 `>=24`
+- 已验证 DSH 源码版本：见 [兼容性说明](docs/COMPATIBILITY.md)
+
+当 DSH 的公开接口没有提供服务归属、隔离域或完整提示词段声明时，透视会明确显示为不可用，不会读取私有字段或自行猜测。
+
+## 配置
+
+所有配置都可选，并在插件加载时校验：
 
 ```yaml
 - name: '@deepseek-ai/dsh-runtime-xray'
@@ -44,25 +93,35 @@ The Host gateway accepts these optional values under the plugin's `config` entry
     deadlineMs: 750
 ```
 
-All values are bounded and validated at load time. The plugin does not require an API key, environment variable, network destination, or writable data directory.
+## 常见问题
 
-The snapshot is read-only and allowlist-based. Default captures exclude credentials, environment values, prompt/runtime-context content, variable values, approval payloads, and tool results. Export uses per-file opaque identities and is capped at 1 MiB. Attribution is labeled exact, inferred, or unavailable; unavailable ownership is expected when DSH does not expose a public provider relationship.
+### 看不到「透视」
 
-The current vertical slice includes a Cordis Host Loader/service/effect projection, effective session tools and prompt metadata, a deterministic Snapshot normalizer, and a Web Client tab named `透视` (X-Ray). The tab is a peer of `对话` and `轨迹`; it uses the dedicated `runtimeXray/snapshot` Remote, supports Current session and Host scopes, domain tabs, status filtering, details, refresh cancellation, and a redacted export preview. Unsupported ownership and optional-domain facts remain explicit diagnostics.
+确认安装完成后重启的是同一个 Web profile。仓库根目录必须包含 `cordis.patch.yml`，安装记录中应出现 `@deepseek-ai/dsh-runtime-xray`。
 
-Session service rows carry a snapshot-local scope marker; isolated Cordis realm identities and complete-section declarations remain unavailable when the active public DSH interfaces do not expose them. Export also replaces identities embedded inside effect labels or other diagnostic strings, not only dedicated ID fields.
+### 某个域显示“不支持”
 
-## Permissions & data
+当前 DSH 组合没有公开对应的检查接口。这不代表该域为空，也不会影响其他域。
 
-X-Ray is read-only. It reads public Loader, service, tool, prompt, and fiber projections from the active DSH process. Default snapshots and exports exclude credentials, environment values, raw prompt and runtime-context content, variable values, approval payloads, tool results, and callable runtime objects. Export identities are pseudonymized consistently within one file and the output is capped at 1 MiB.
+### 会话显示“冷会话”
 
-## Troubleshooting
+该会话当前没有活跃 Agent。打开或新建一个实时会话后重新读取；「整个应用」仍然可以正常检查。
 
-- If `透视` is missing, confirm the package has `dsh.bundle.patch` in its root and restart the same DSH profile after installation.
-- If a domain is `unsupported`, the active DSH composition does not expose that public inspection interface; this is not treated as an empty runtime.
-- If the session is cold, open or create a live session and refresh; Host domains remain available without a live Agent.
-- If a refresh fails, X-Ray keeps the last compatible snapshot and marks it stale. Use Retry after the service is healthy.
+### 重新读取失败
 
-## License & security
+页面会保留上一次成功快照并标记为过期。服务恢复后点击重试即可。
 
-This project is released under the MIT License. Please report security issues through GitHub's private vulnerability reporting for this repository when available; do not open a public issue containing credentials, prompt content, or other sensitive data.
+## 开发
+
+```sh
+pnpm install
+pnpm run typecheck
+pnpm test
+pnpm run build
+```
+
+完整验证还包括 Node.js 22.19 / 24.19 兼容矩阵，以及在真实 DSH Web 中通过可见操作检查安装、语言切换、重新读取和导出。
+
+## 安全与许可
+
+项目采用 [MIT License](LICENSE)。安全问题请使用 GitHub 的私密漏洞报告；不要在公开 Issue 中提交凭据、提示词正文或其他敏感数据。详见 [SECURITY.md](SECURITY.md)。

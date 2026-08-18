@@ -12,10 +12,11 @@ import {
   normalizeSnapshot,
   type RuntimeSnapshot,
   type SessionSnapshotInput,
+  type SkillEntity,
   type SnapshotDomainInput,
   type SnapshotRequest,
 } from './snapshot.ts'
-import { projectFiberEffects, projectLoaderEntries, projectServiceEntities, type LoaderEntry } from './host-projection.ts'
+import { inferServiceRelationships, projectFiberEffects, projectLoaderEntries, projectServiceEntities, type LoaderEntry } from './host-projection.ts'
 
 export * from './snapshot.ts'
 export * from './remote.ts'
@@ -36,6 +37,24 @@ interface AgentPresetRuntime {
   composedPreset(agentContext: Context): string | undefined
 }
 
+interface SkillRuntime {
+  snapshot(options: { readonly scope?: object; readonly cwd?: string; readonly signal?: AbortSignal }): Promise<{
+    readonly complete: boolean
+    readonly skills: readonly {
+      readonly name: string
+      readonly description: string
+      readonly provider: string
+      readonly source: string
+      readonly invocation: { readonly modelInvocable: boolean; readonly userInvocable: boolean }
+    }[]
+  }>
+}
+
+interface SkillCollection {
+  readonly domain: SnapshotDomainInput<SkillEntity>
+  readonly complete: boolean
+}
+
 /** Bounded collection settings validated by the Cordis Loader. */
 export interface RuntimeXrayConfig {
   readonly maxEntitiesPerDomain: number
@@ -50,7 +69,7 @@ const DEFAULT_CONFIG: RuntimeXrayConfig = {
   maxEffectDepth: 32,
   deadlineMs: 750,
 }
-export { projectFiberEffects, projectLoaderEntries, projectServiceEntities } from './host-projection.ts'
+export { inferServiceRelationships, projectFiberEffects, projectLoaderEntries, projectServiceEntities } from './host-projection.ts'
 
 /** Read-only Host gateway for the first runtime X-Ray vertical slice. */
 export class RuntimeXrayGateway extends TypertRemoteService {
@@ -87,7 +106,7 @@ export class RuntimeXrayGateway extends TypertRemoteService {
     const deadlineAt = startedAt + this.config.deadlineMs
     const host = this.ctx as unknown as RuntimeHostContext
     const loaderEntries = [...host.loader.entries()]
-    const selected = new Set(request?.domains ?? ['plugins', 'services', 'effects', 'tools', 'prompt'])
+    const selected = new Set(request?.domains ?? ['plugins', 'services', 'effects', 'skills', 'tools', 'prompt'])
     const bounded = <T>(items: readonly T[], domain: string) => items.length > this.config.maxEntitiesPerDomain
       ? {
         status: 'truncated' as const,
@@ -125,6 +144,7 @@ export class RuntimeXrayGateway extends TypertRemoteService {
         toId: service.name,
         attribution: service.attribution,
       }]),
+      ...inferServiceRelationships(effects.items, services.items),
       ...effects.items.flatMap(effect => effect.parentId === undefined ? [] : [{
         relationshipId: `${effect.parentId}->${effect.effectId}`,
         kind: 'parent' as const,
@@ -157,11 +177,7 @@ export class RuntimeXrayGateway extends TypertRemoteService {
         fiberEffects: selected.has('effects'),
       },
       relationships,
-      diagnostics: [{
-        code: 'runtime-xray-slice',
-        message: 'Tool and prompt ownership attribution remains unavailable when the public DSH interfaces do not expose a provider relationship.',
-        severity: 'info',
-      }, ...diagnostics],
+      diagnostics,
     })
   }
 }
@@ -197,6 +213,8 @@ async function collectSessionSnapshot(
       sessionId,
       status: 'cold',
       services: unavailable('session-cold-services'),
+      skills: selected.has('skills') ? unavailable('session-cold-skills') : unavailable('skills-not-requested'),
+      skillCatalogComplete: false,
       tools: selected.has('tools') ? unavailable('session-cold-tools') : unavailable('tools-not-requested'),
       prompt: selected.has('prompt') ? unavailable('session-cold-prompt') : unavailable('prompt-not-requested'),
       promptToolCount: 0,
@@ -206,18 +224,14 @@ async function collectSessionSnapshot(
   }
 
   const toolsRuntime = host.get('tools') as { schemas(scope: Agent): readonly { name: string; parameters: unknown }[] } | undefined
-  // The selected Agent context is the public session scope. Its Cordis scope key
-  // is intentionally not serialized; this snapshot-local label keeps the UI
-  // explicit about the plane without turning an object identity into a wire id.
-  const sessionScopeId = 'scope-session'
   const services = (() => {
     try {
       return {
         status: 'ready' as const,
-        items: projectServiceEntities(agent.ctx, []).map(service => ({ ...service, scopeId: sessionScopeId })),
+        items: projectServiceEntities(agent.ctx, []),
         diagnostics: [{
           code: 'session-realm-not-exposed',
-          message: 'The public session service projection exposes the selected scope, but not isolated realm identities.',
+          message: 'The public service projection exposes visible names, but not registration scopes or isolated realm identities.',
           severity: 'info' as const,
         }],
       }
@@ -273,6 +287,16 @@ async function collectSessionSnapshot(
       toolSchemaBytes: 0,
       runtimeContextSuppressed: false,
     }
+  const skillCollection = selected.has('skills')
+    ? await skillDomainSafely(host, agent, signal)
+    : {
+      domain: {
+        status: 'unsupported' as const,
+        items: [],
+        diagnostics: [{ code: 'skills-not-requested', message: 'The skills domain was not requested for this capture.', severity: 'info' as const }],
+      },
+      complete: false,
+    }
 
   const presetRuntime = host.get('agentPresets') as AgentPresetRuntime | undefined
   let preset: string | undefined
@@ -288,6 +312,8 @@ async function collectSessionSnapshot(
     ...agent.options.provider === undefined ? {} : { modelProvider: agent.options.provider },
     ...agent.options.model === undefined ? {} : { model: agent.options.model },
     services,
+    skills: skillCollection.domain,
+    skillCatalogComplete: skillCollection.complete,
     tools,
     prompt: promptCollection.domain,
     promptToolCount: promptCollection.toolCount,
@@ -324,7 +350,7 @@ function timedOutSession(sessionId: string): SessionSnapshotInput {
     items: [],
     diagnostics: [{ code: `${name}-deadline-exceeded`, message: 'The session domain exceeded the snapshot deadline.', severity: 'warning' as const }],
   })
-  return { sessionId, status: 'unavailable', services: domain('services'), tools: domain('tools'), prompt: domain('prompt') }
+  return { sessionId, status: 'unavailable', services: domain('services'), skills: domain('skills'), skillCatalogComplete: false, tools: domain('tools'), prompt: domain('prompt') }
 }
 
 function timedOutDomain<T>(name: string): SnapshotDomainInput<T> {
@@ -340,6 +366,7 @@ function limitSessionSnapshot(input: SessionSnapshotInput, limit: number): Sessi
   return {
     ...input,
     services: limitDomain(input.services, limit, 'session-services'),
+    ...input.skills === undefined ? {} : { skills: limitDomain(input.skills, limit, 'skills') },
     tools: limitDomain(input.tools, limit, 'tools'),
     prompt: limitDomain(input.prompt, limit, 'prompt'),
   }
@@ -352,6 +379,40 @@ function limitDomain<T>(input: SnapshotDomainInput<T>, limit: number, name: stri
     status: 'truncated',
     items: input.items.slice(0, limit),
     diagnostics: [...input.diagnostics, { code: `${name}-truncated`, message: `The ${name} domain exceeded the configured entity limit.`, severity: 'warning' }],
+  }
+}
+
+/** Collect the invocation-neutral Skill catalog visible from one Agent scope. */
+async function skillDomainSafely(host: RuntimeHostContext, agent: Agent, signal?: AbortSignal): Promise<SkillCollection> {
+  const runtime = host.get('skills') as SkillRuntime | undefined
+  if (runtime === undefined) {
+    return {
+      domain: { status: 'unsupported', items: [], diagnostics: [{ code: 'skills-service-unavailable', message: 'The Skill registry is not available in this composition.', severity: 'info' }] },
+      complete: false,
+    }
+  }
+  try {
+    const snapshot = await runtime.snapshot({ scope: agent, cwd: agent.session.header.cwd, ...signal === undefined ? {} : { signal } })
+    return {
+      domain: {
+        status: snapshot.complete ? 'ready' : 'partial',
+        items: snapshot.skills.map(skill => ({
+          name: skill.name,
+          description: skill.description.length > 400 ? `${skill.description.slice(0, 397)}…` : skill.description,
+          provider: skill.provider,
+          source: skill.source,
+          modelInvocable: skill.invocation.modelInvocable,
+          userInvocable: skill.invocation.userInvocable,
+        })),
+        diagnostics: snapshot.complete ? [] : [{ code: 'skill-catalog-incomplete', message: 'One or more Skill providers did not complete a stable catalog observation.', severity: 'warning' }],
+      },
+      complete: snapshot.complete,
+    }
+  } catch (error) {
+    return {
+      domain: { status: 'failed', items: [], diagnostics: [{ code: 'skills-collection-failed', message: safeErrorMessage(error), severity: 'error' }] },
+      complete: false,
+    }
   }
 }
 

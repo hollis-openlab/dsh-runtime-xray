@@ -6,6 +6,7 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
+import XYFLOW_STYLES from '@xyflow/react/dist/style.css'
 import type {} from '../remote.ts'
 import { XRayView } from './XRayView.tsx'
 import { en, NS, zh, type RuntimeXrayLocaleKey } from './locales.ts'
@@ -35,7 +36,7 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => {
     const style = document.createElement('style')
     style.dataset.plugin = name
-    style.textContent = STYLES
+    style.textContent = `${XYFLOW_STYLES}\n${STYLES}`
     document.head.appendChild(style)
     return () => { style.remove() }
   }, 'dsh-runtime-xray: styles')

@@ -67,16 +67,23 @@ await build({
 const temporaryClient = join(lib, '_client.js')
 await build({
   bundle: true,
+  define: {
+    'import.meta.env': JSON.stringify({ MODE: 'production' }),
+    'import.meta.env.MODE': JSON.stringify('production'),
+    'process.env.NODE_ENV': JSON.stringify('production'),
+  },
   entryPoints: [join(ROOT, 'src', 'client', 'index.ts')],
   external: ['react'],
   format: 'cjs',
+  loader: { '.css': 'text' },
   logOverride: { 'commonjs-variable-in-esm': 'silent' },
+  minify: true,
   outfile: temporaryClient,
   platform: 'browser',
   target: 'es2020',
 })
 
-const clientSource = (await readFile(temporaryClient, 'utf8')).trimEnd()
+const clientSource = (await readFile(temporaryClient, 'utf8')).replace(/[ \t]+$/gm, '').trimEnd()
 await rm(temporaryClient)
 await writeFile(join(lib, 'client.js'), [
   'window.__ModuleLoader__.load({',

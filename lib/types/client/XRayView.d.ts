@@ -7,5 +7,5 @@ interface XRayViewProps extends ConvViewProps {
     readonly clientGeneration: string;
 }
 /** Read-only X-Ray view over one detached Host/session snapshot. */
-export declare function XRayView({ clientGeneration, loadSnapshot, sessionId, useSession, t }: XRayViewProps): import("react").JSX.Element;
+export declare function XRayView({ clientGeneration, loadSnapshot, sessionId, t }: XRayViewProps): import("react").JSX.Element;
 export {};

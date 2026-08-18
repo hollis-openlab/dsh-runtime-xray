@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {
   EffectEntity,
@@ -6,14 +6,25 @@ import type {
   PromptEntity,
   RuntimeSnapshot,
   ServiceEntity,
+  SkillEntity,
   ToolEntity,
 } from '../snapshot.ts'
 import type { RuntimeXrayLocaleKey } from './locales.ts'
 import { serializeRedactedSnapshot } from './export.ts'
 import { filterRows, type QualityFilter, type StatusFilter } from './filter.ts'
+import { RequestContextTree, RuntimeMap } from './RuntimeVisuals.tsx'
+import { PromptComposition } from './PromptComposition.tsx'
+import { presentService } from './ServicePresentation.ts'
+import { EffectComposition, presentEffect } from './EffectComposition.tsx'
 
 type Scope = 'session' | 'host'
-type Domain = 'overview' | 'plugins' | 'services' | 'tools' | 'prompt' | 'effects'
+type Domain = 'overview' | 'plugins' | 'services' | 'skills' | 'tools' | 'prompt' | 'effects'
+
+interface DomainLayer {
+  readonly id: string
+  readonly label: string
+  readonly domains: readonly Domain[]
+}
 
 interface XRayViewProps extends ConvViewProps {
   readonly loadSnapshot: (sessionId?: string, signal?: AbortSignal) => Promise<RuntimeSnapshot>
@@ -31,13 +42,16 @@ interface DisplayRow {
   readonly label: string
   readonly secondary: string
   readonly status: string
-  readonly entity: PluginEntry | ServiceEntity | ToolEntity | PromptEntity | EffectEntity
+  readonly description?: string
+  readonly depth?: number
+  readonly entity: PluginEntry | ServiceEntity | SkillEntity | ToolEntity | PromptEntity | EffectEntity
 }
 
-const DOMAINS: readonly Domain[] = ['overview', 'plugins', 'services', 'tools', 'prompt', 'effects']
+const SESSION_DOMAINS: readonly Domain[] = ['overview', 'services', 'skills', 'tools', 'prompt']
+const HOST_DOMAINS: readonly Domain[] = ['overview', 'plugins', 'services', 'effects']
 
 /** Read-only X-Ray view over one detached Host/session snapshot. */
-export function XRayView({ clientGeneration, loadSnapshot, sessionId, useSession, t }: XRayViewProps) {
+export function XRayView({ clientGeneration, loadSnapshot, sessionId, t }: XRayViewProps) {
   const [state, setState] = useState<ReadState>({ status: 'loading' })
   const [scope, setScope] = useState<Scope>('session')
   const [domain, setDomain] = useState<Domain>('overview')
@@ -49,8 +63,24 @@ export function XRayView({ clientGeneration, loadSnapshot, sessionId, useSession
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const requestGeneration = useRef(0)
   const activeRequest = useRef<AbortController | undefined>(undefined)
-  const openState = useSession(snapshot => snapshot.openState)
-  const running = useSession(snapshot => snapshot.running)
+  const availableDomains = scope === 'session' ? SESSION_DOMAINS : HOST_DOMAINS
+  const localeGeneration = t('tab')
+  const domainLayers: readonly DomainLayer[] = scope === 'session' ? [
+    { id: 'runtime', label: t('runtimeLayer'), domains: ['services'] },
+    { id: 'capability', label: t('capabilityLayer'), domains: ['skills', 'tools'] },
+    { id: 'model', label: t('modelLayer'), domains: ['prompt'] },
+  ] : [
+    { id: 'runtime', label: t('runtimeLayer'), domains: ['plugins', 'services', 'effects'] },
+  ]
+
+  const changeScope = (nextScope: Scope): void => {
+    setScope(nextScope)
+    setDomain('overview')
+    setQuery('')
+    setStatusFilter('all')
+    setQualityFilter('all')
+    setSelectedId(null)
+  }
 
   const refresh = (): void => {
     const generation = requestGeneration.current + 1
@@ -89,24 +119,45 @@ export function XRayView({ clientGeneration, loadSnapshot, sessionId, useSession
     }
   }, [loadSnapshot, scope, sessionId])
 
+  useEffect(() => {
+    if (!availableDomains.includes(domain)) setDomain('overview')
+  }, [availableDomains, domain])
+
   const snapshot = state.snapshot
-  const rows = useMemo(() => displayRows(snapshot, scope, domain), [domain, scope, snapshot])
-  const allRows = useMemo(() => DOMAINS.flatMap(item => displayRows(snapshot, scope, item)), [scope, snapshot])
+  const rows = useMemo(() => displayRows(snapshot, scope, domain, t), [domain, localeGeneration, scope, snapshot, t])
+  const allRows = useMemo(() => availableDomains.flatMap(item => displayRows(snapshot, scope, item, t)), [availableDomains, localeGeneration, scope, snapshot, t])
   const filtered = useMemo(() => filterRows(rows, query, statusFilter, qualityFilter), [query, qualityFilter, rows, statusFilter])
   const selected = filtered.find(row => row.id === selectedId) ?? rows.find(row => row.id === selectedId) ?? allRows.find(row => row.id === selectedId)
   const selectedParentId: string | undefined = selected !== undefined && 'parentId' in selected.entity && typeof selected.entity.parentId === 'string' ? selected.entity.parentId : undefined
-  const pluginItems = snapshot?.host.plugins.items ?? []
-  const active = pluginItems.filter(entry => entry.enabled && entry.phase === 'active').length
+  const visibleDiagnostics = snapshot?.diagnostics.filter(item => item.severity !== 'info') ?? []
+  const hasActiveFilters = query.trim() !== '' || statusFilter !== 'all' || qualityFilter !== 'all'
+  const effectSourceLabels = useMemo(() => {
+    const counts = new Map<string, number>()
+    const names = new Map<string, string>()
+    for (const plugin of snapshot?.host.plugins.items ?? []) {
+      const id = plugin.entryId
+      counts.set(id, (counts.get(id) ?? 0) + 1)
+      names.set(id, plugin.moduleName)
+    }
+    return new Map([...names.entries()].filter(([id]) => counts.get(id) === 1))
+  }, [snapshot])
 
   return (
     <div data-dsh-runtime-xray="">
-      <div className="xray-toolbar" role="toolbar" aria-label={t('title')}>
-        <div className="xray-segment" role="group" aria-label={t('scope')}>
-          <button type="button" aria-pressed={scope === 'session'} onClick={() => setScope('session')}>{t('currentSession')}</button>
-          <button type="button" aria-pressed={scope === 'host'} onClick={() => setScope('host')}>{t('host')}</button>
+      <div className="xray-topbar">
+        <div className="xray-scope-block">
+          <span className="xray-scope-label">{t('scope')}</span>
+          <div className="xray-segment" role="group" aria-label={t('scope')}>
+            <button type="button" aria-pressed={scope === 'session'} onClick={() => changeScope('session')}>{t('currentSession')}</button>
+            <button type="button" aria-pressed={scope === 'host'} onClick={() => changeScope('host')}>{t('host')}</button>
+          </div>
         </div>
-        <button type="button" onClick={refresh} disabled={state.status === 'loading'}>{t('refresh')}</button>
-        <button type="button" onClick={() => setExportOpen(true)} disabled={snapshot === undefined}>{t('export')}</button>
+        <div className="xray-actions" role="group" aria-label={t('actions')}>
+          <button className="xray-action" type="button" onClick={refresh} disabled={state.status === 'loading'}>{t('refresh')}</button>
+          <button className="xray-action xray-action-primary" type="button" onClick={() => setExportOpen(true)} disabled={snapshot === undefined}>{t('export')}</button>
+        </div>
+      </div>
+      {domain !== 'overview' ? <div className="xray-filterbar" role="toolbar" aria-label={t('filters')}>
         <select aria-label={t('filter')} value={statusFilter} onChange={event => { setStatusFilter(event.currentTarget.value as StatusFilter) }}>
           <option value="all">{t('allStatuses')}</option>
           <option value="active">{t('active')}</option>
@@ -131,11 +182,10 @@ export function XRayView({ clientGeneration, loadSnapshot, sessionId, useSession
           value={query}
           onChange={event => { setQuery(event.currentTarget.value) }}
         />
-      </div>
+      </div> : null}
       {exportOpen && snapshot !== undefined ? (
         <div className="xray-export-preview" role="dialog" aria-label={t('exportPreview')}>
           <strong>{t('exportPreview')}</strong>
-          <p>{t('exportDescription')}</p>
           <button type="button" onClick={() => {
             const ok = downloadSnapshot(snapshot)
             if (ok) { setExportError(undefined); setExportOpen(false) }
@@ -145,24 +195,30 @@ export function XRayView({ clientGeneration, loadSnapshot, sessionId, useSession
           {exportError !== undefined ? <p role="alert">{exportError}</p> : null}
         </div>
       ) : null}
-      <div className="xray-domain-tabs" role="tablist" aria-label={t('domain')}>
-        {DOMAINS.map(item => (
-          <button key={item} type="button" role="tab" aria-selected={domain === item} onClick={() => { setDomain(item); setSelectedId(null) }}>
-            {t(item)}
-          </button>
+      <div className="xray-domain-tabs" role="navigation" aria-label={t('domain')}>
+        <button className="xray-domain-overview" type="button" role="tab" aria-selected={domain === 'overview'} onClick={() => { setDomain('overview'); setSelectedId(null) }}>
+          {t('overview')}
+        </button>
+        {domainLayers.map(layer => (
+          <div className="xray-domain-layer" data-layer={layer.id} key={layer.id}>
+            <span className="xray-domain-layer-label">{layer.label}</span>
+            <div className="xray-domain-layer-tabs">
+              {layer.domains.filter(item => availableDomains.includes(item)).map(item => (
+                <button key={item} type="button" role="tab" aria-selected={domain === item} onClick={() => { setDomain(item); setSelectedId(null) }}>
+                  {t(item)}
+                </button>
+              ))}
+            </div>
+          </div>
         ))}
       </div>
       <div className="xray-body">
         <div className="xray-content">
           <div className="xray-heading">
-            <h2>{t('title')}</h2>
+            <div className="xray-heading-copy">
+              <h2>{t('title')}</h2>
+            </div>
             <span className="xray-meta">{scope === 'session' ? sessionId : t('host')}</span>
-          </div>
-          <div className="xray-summary" aria-label={t('title')}>
-            <div className="xray-card"><strong>{snapshot === undefined ? '—' : pluginItems.length}</strong><span>{t('total')}</span></div>
-            <div className="xray-card"><strong>{snapshot === undefined ? '—' : active}</strong><span>{t('active')}</span></div>
-            <div className="xray-card"><strong>{running ? t('active') : openState}</strong><span>{t('sessionState')}</span></div>
-            <div className="xray-card"><strong>{snapshot === undefined ? '—' : statusLabel(snapshot.health, t)}</strong><span>{t('health')}</span></div>
           </div>
           {state.status === 'loading' ? <div className="xray-status" role="status">{t('loading')}</div> : null}
           {state.status === 'loading' && snapshot !== undefined ? <div className="xray-status" role="status">{t('refreshing')}</div> : null}
@@ -174,16 +230,44 @@ export function XRayView({ clientGeneration, loadSnapshot, sessionId, useSession
               <button type="button" onClick={refresh}>{t('retry')}</button>
             </div>
           ) : null}
-          {snapshot !== undefined && domain !== 'overview' && filtered.length === 0 ? <div className="xray-status">{t('noResults')}</div> : null}
-          {snapshot !== undefined && domain !== 'overview' && filtered.length > 0 ? (
+          {snapshot !== undefined && domain !== 'overview' && filtered.length === 0 ? <div className="xray-status">{t(hasActiveFilters ? 'noResults' : 'emptyDomain')}</div> : null}
+          {snapshot !== undefined && domain === 'prompt' && filtered.length > 0 ? (
+            <PromptComposition
+              rows={filtered.map(row => ({ id: row.id, entity: row.entity as PromptEntity }))}
+              selectedId={selectedId}
+              t={t}
+              onSelect={setSelectedId}
+            />
+          ) : null}
+          {snapshot !== undefined && domain === 'effects' && filtered.length > 0 ? (
+            <EffectComposition
+              rows={filtered.map(row => ({ id: row.id, label: row.label, description: row.description ?? '', entity: row.entity as EffectEntity }))}
+              selectedId={selectedId}
+              sourceLabels={effectSourceLabels}
+              t={t}
+              onSelect={setSelectedId}
+            />
+          ) : null}
+          {snapshot !== undefined && domain !== 'overview' && domain !== 'prompt' && domain !== 'effects' && filtered.length > 0 ? (
             <ul className="xray-list" aria-label={t(domain)}>
               {filtered.map(row => (
                 <li key={row.id}>
-                  <button className="xray-entry" type="button" aria-pressed={selectedId === row.id} onClick={() => setSelectedId(row.id)}>
-                    <span className="xray-dot" data-active={row.status === 'active' || row.status === 'available' || undefined} aria-hidden="true" />
+                  <button
+                    className="xray-entry"
+                    data-status={row.status}
+                    data-tree={row.depth === undefined ? undefined : true}
+                    style={row.depth === undefined ? undefined : { '--xray-tree-depth': Math.min(row.depth, 10) } as CSSProperties}
+                    type="button"
+                    title={row.description}
+                    aria-pressed={selectedId === row.id}
+                    onClick={() => setSelectedId(row.id)}
+                  >
+                    {row.depth === undefined || row.depth === 0 ? null : <span className="xray-tree-branch" aria-hidden="true">↳</span>}
+                    <span className="xray-dot" data-status={row.status} aria-hidden="true" />
                     <span className="xray-entry-name">{row.label}</span>
                     <span className="xray-entry-module">{row.secondary}</span>
-                    <span className="xray-entry-status">{statusLabel(row.status, t)}</span>
+                    <span className="xray-entry-status" data-status={row.status}>{statusLabel(row.status, t)}</span>
+                    {row.description === undefined ? null : <span className="xray-entry-tooltip" role="tooltip">{row.description}</span>}
                   </button>
                 </li>
               ))}
@@ -191,18 +275,25 @@ export function XRayView({ clientGeneration, loadSnapshot, sessionId, useSession
           ) : null}
           {snapshot !== undefined && domain === 'overview' ? (
             <div className="xray-overview" aria-label={t('overview')}>
-              <div className="xray-domain-card"><strong>{t('snapshotTime')}</strong><time dateTime={new Date(snapshot.capture.completedAt).toISOString()}>{new Date(snapshot.capture.completedAt).toLocaleString()}</time></div>
-              <div className="xray-domain-card"><strong>{t('schemaVersion')}</strong><span>{snapshot.schemaVersion}</span></div>
-              {Object.entries(snapshot.host).map(([name, value]) => (
-                <div className="xray-domain-card" key={name}><strong>{t(name as Domain)}</strong><span>{statusLabel(value.status, t)} · {value.items.length}</span></div>
-              ))}
-              {scope === 'session' && (snapshot.session === undefined ? <div className="xray-status">{t('sessionUnavailable')}</div> : <div className="xray-domain-card"><strong>{t('currentSession')}</strong><span>{statusLabel(snapshot.session.status, t)} · {snapshot.session.tools.items.length} {t('tools')} · {snapshot.session.promptToolCount ?? 0} {t('promptSchemas')}</span></div>)}
-              {snapshot.session?.preset !== undefined ? <div className="xray-domain-card"><strong>{t('preset')}</strong><span>{snapshot.session.preset}</span></div> : null}
-              {snapshot.session?.modelProvider !== undefined || snapshot.session?.model !== undefined ? <div className="xray-domain-card"><strong>{t('model')}</strong><span>{[snapshot.session.modelProvider, snapshot.session.model].filter(Boolean).join(' / ')}</span></div> : null}
-              <div className="xray-domain-card"><strong>{t('clientGeneration')}</strong><span>{clientGeneration}</span></div>
+              <RuntimeMap
+                snapshot={snapshot}
+                scope={scope}
+                t={t}
+                onOpenDomain={nextDomain => { setDomain(nextDomain); setSelectedId(null) }}
+                onSelectEntity={setSelectedId}
+              />
+              {scope === 'session' ? <RequestContextTree snapshot={snapshot} t={t} /> : null}
+              <details className="xray-snapshot-meta">
+                <summary>{t('snapshotDetails')}</summary>
+                <dl>
+                  <div><dt>{t('snapshotTime')}</dt><dd><time dateTime={new Date(snapshot.capture.completedAt).toISOString()}>{new Date(snapshot.capture.completedAt).toLocaleString()}</time></dd></div>
+                  <div><dt>{t('schemaVersion')}</dt><dd>{snapshot.schemaVersion}</dd></div>
+                  <div><dt>{t('clientGeneration')}</dt><dd>{clientGeneration}</dd></div>
+                </dl>
+              </details>
             </div>
           ) : null}
-          {snapshot !== undefined && snapshot.diagnostics.length > 0 ? <div className="xray-diagnostics" role="status">{snapshot.diagnostics.map(item => <span key={`${item.code}:${item.message}`}>{item.code}: {item.message}</span>)}</div> : null}
+          {visibleDiagnostics.length > 0 ? <div className="xray-diagnostics" role="status">{visibleDiagnostics.map(item => <span key={`${item.code}:${item.message}`}>{item.code}: {item.message}</span>)}</div> : null}
         </div>
         {selected !== undefined ? (
           <aside className="xray-details" aria-label={t('details')}>
@@ -211,7 +302,7 @@ export function XRayView({ clientGeneration, loadSnapshot, sessionId, useSession
             <pre>{JSON.stringify(selected.entity, null, 2)}</pre>
             {snapshot !== undefined && snapshot.relationships.filter(link => link.fromId === selected.id || link.toId === selected.id).map(link => (
               <button key={link.relationshipId} type="button" onClick={() => setSelectedId(link.fromId === selected.id ? link.toId : link.fromId)}>
-                {t('relationship')}: {link.kind} → {link.fromId === selected.id ? link.toId : link.fromId}
+                {t('relationship')}: {relationshipLabel(link.kind, t)} → {link.fromId === selected.id ? link.toId : link.fromId}
               </button>
             ))}
             {selectedParentId !== undefined ? <button type="button" onClick={() => setSelectedId(selectedParentId)}>{t('parent')}</button> : null}
@@ -227,40 +318,52 @@ function statusLabel(value: string, t: XRayViewProps['t']): string {
   const key: Partial<Record<string, RuntimeXrayLocaleKey>> = {
     healthy: 'healthy', partial: 'partial', failed: 'failed', ready: 'ready', unsupported: 'unsupported', truncated: 'truncated',
     active: 'active', available: 'available', pending: 'pending', loading: 'loadingPhase', unloading: 'unloading', unobserved: 'unobserved',
-    running: 'running', idle: 'idle', cold: 'cold', unavailable: 'unavailable', unknown: 'unknown', missing: 'missing',
+    running: 'running', idle: 'idle', cold: 'cold', unavailable: 'unavailable', unknown: 'unknown', missing: 'missing', open: 'open', closed: 'closed',
   }
   const localized = key[value]
   return localized === undefined ? value : t(localized)
 }
 
-function displayRows(snapshot: RuntimeSnapshot | undefined, scope: Scope, domain: Domain): readonly DisplayRow[] {
+function displayRows(snapshot: RuntimeSnapshot | undefined, scope: Scope, domain: Domain, t: XRayViewProps['t']): readonly DisplayRow[] {
   if (snapshot === undefined || domain === 'overview') return []
   let source: { readonly items: readonly unknown[] } | undefined
   if (scope === 'host') {
     if (domain !== 'plugins' && domain !== 'services' && domain !== 'effects') return []
     source = snapshot.host[domain]
   } else {
-    if (domain !== 'services' && domain !== 'tools' && domain !== 'prompt') return []
+    if (domain !== 'services' && domain !== 'skills' && domain !== 'tools' && domain !== 'prompt') return []
     source = snapshot.session?.[domain]
   }
   if (source === undefined) return []
   return source.items.map((entity, index) => {
     if (domain === 'plugins') {
       const item = entity as PluginEntry
-      const missing = item.missingServices?.length === undefined || item.missingServices.length === 0 ? '' : ` · ${item.missingServices.length} missing`
+      const missing = item.missingServices?.length === undefined || item.missingServices.length === 0 ? '' : ` · ${item.missingServices.length} ${t('missingServices')}`
       return { id: item.entryId, label: item.entryId, secondary: `${item.moduleName}${missing}`, status: item.phase ?? 'unobserved', entity: item }
     }
     if (domain === 'services') {
       const item = entity as ServiceEntity
-      return { id: item.name, label: item.name, secondary: item.attribution?.sourceId ?? '', status: item.status, entity: item }
+      const presentation = presentService(item.name, t)
+      const secondary = [item.name, item.attribution?.sourceId].filter(Boolean).join(' · ')
+      return { id: item.name, label: presentation.label, secondary, description: presentation.description, status: item.status, entity: item }
     }
     if (domain === 'effects') {
       const item = entity as EffectEntity
-      return { id: item.effectId, label: item.label, secondary: item.parentId ?? '', status: `depth ${item.depth}`, entity: item }
+      const presentation = presentEffect(item.label, t)
+      const secondary = [item.attribution?.sourceId, item.parentId].filter(Boolean).join(' · ')
+      return { id: item.effectId, label: presentation.label, secondary, description: presentation.description, status: 'ready', depth: item.depth, entity: item }
+    }
+    if (domain === 'skills') {
+      const item = entity as SkillEntity
+      return { id: `skills:${item.name}:${index}`, label: item.name, secondary: `${item.provider} · ${item.source}`, status: 'ready', entity: item }
     }
     const item = entity as ToolEntity | PromptEntity
     return { id: `${domain}:${item.name}:${index}`, label: item.name, secondary: 'schemaBytes' in item ? `${item.schemaBytes} B` : `${item.bytes} B`, status: 'ready', entity: item }
   })
+}
+
+function relationshipLabel(kind: RuntimeSnapshot['relationships'][number]['kind'], t: XRayViewProps['t']): string {
+  return t(kind === 'provides' ? 'provides' : kind === 'owns' ? 'owns' : 'parentRelation')
 }
 
 function snapshotHasEntity(snapshot: RuntimeSnapshot, id: string): boolean {
@@ -268,6 +371,7 @@ function snapshotHasEntity(snapshot: RuntimeSnapshot, id: string): boolean {
     || snapshot.host.services.items.some(item => item.name === id)
     || snapshot.host.effects.items.some(item => item.effectId === id)
     || snapshot.session?.services.items.some(item => item.name === id) === true
+    || snapshot.session?.skills?.items.some((item, index) => `skills:${item.name}:${index}` === id) === true
     || snapshot.session?.tools.items.some((item, index) => `${'tools'}:${item.name}:${index}` === id) === true
     || snapshot.session?.prompt.items.some((item, index) => `${'prompt'}:${item.name}:${index}` === id) === true
 }

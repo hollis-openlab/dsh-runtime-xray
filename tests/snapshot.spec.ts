@@ -31,6 +31,12 @@ describe('normalizeSnapshot', () => {
         modelProvider: 'volcengine',
         model: 'deepseek-v4-flash',
         services: { status: 'ready', items: [], diagnostics: [] },
+        skillCatalogComplete: true,
+        skills: {
+          status: 'ready',
+          items: [{ name: 'diagnose-runtime', description: 'Inspect runtime state.', provider: 'fixture', source: 'runtime', modelInvocable: true, userInvocable: true }],
+          diagnostics: [],
+        },
         tools: {
           status: 'ready',
           items: [
@@ -56,6 +62,8 @@ describe('normalizeSnapshot', () => {
     expect(snapshot.session?.tools.items.map(item => item.name)).toEqual(['a_tool', 'z_tool'])
     expect(snapshot.session?.preset).toBe('standard')
     expect(snapshot.session?.model).toBe('deepseek-v4-flash')
+    expect(snapshot.session?.skills?.items[0]?.name).toBe('diagnose-runtime')
+    expect(snapshot.session?.skillCatalogComplete).toBe(true)
     expect(snapshot.host.plugins.diagnostics.map(item => item.code)).toEqual(['AAA', 'ZED'])
     expect(snapshot.redaction.policy).toBe('allowlist')
     expect(snapshot.redaction.excluded).toContain('credentials')
