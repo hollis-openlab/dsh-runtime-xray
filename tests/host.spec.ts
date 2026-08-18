@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { projectFiberEffects, projectLoaderEntries, projectServiceEntities } from '../src/host-projection.ts'
+import { inferServiceRelationships, projectFiberEffects, projectLoaderEntries, projectServiceEntities } from '../src/host-projection.ts'
 import { SNAPSHOT_REQUEST_SCHEMA, SNAPSHOT_RESPONSE_SCHEMA, TYPERT_REMOTE } from '../src/remote.ts'
 
 describe('Host Loader projection', () => {
@@ -30,10 +30,11 @@ describe('Host Loader projection', () => {
     expect(TYPERT_REMOTE.descriptors[0]?.id).toBe('@deepseek-ai/dsh-runtime-xray#runtimeXray/snapshot')
     expect(TYPERT_REMOTE.descriptors[0]?.result.mode).toBe('strict')
     expect(TYPERT_REMOTE.descriptors[0]?.cancellation).toEqual({ parameter: 'signal' })
-    expect(TYPERT_REMOTE.descriptors[0]?.sourceLocation?.line).toBe(84)
+    expect(TYPERT_REMOTE.descriptors[0]?.sourceLocation?.line).toBe(102)
   })
 
   it('rejects malformed request and response payloads at the Remote seam', () => {
+    expect(SNAPSHOT_REQUEST_SCHEMA.parse({ domains: ['skills'] })).toEqual({ domains: ['skills'] })
     expect(() => SNAPSHOT_REQUEST_SCHEMA.parse({ domains: ['not-a-domain'] })).toThrow()
     expect(() => SNAPSHOT_RESPONSE_SCHEMA.parse({ schemaVersion: 1, health: 'healthy' })).toThrow()
   })
@@ -57,7 +58,8 @@ describe('Host Loader projection', () => {
 
   it('projects only public service metadata and attributes the owning Loader entry', () => {
     const fiber = { name: 'entry-fiber', state: 2 }
-    const ctx = { reflect: { store: { [Symbol('service')]: { name: 'tools', fiber } } } }
+    const providerFiber = { name: 'provider-fiber', state: 2, parent: { fiber } }
+    const ctx = { reflect: { store: { [Symbol('service')]: { name: 'tools', fiber: providerFiber } } } }
     const services = projectServiceEntities(ctx as never, [{
       id: 'entry-a', disabled: false, options: { name: '@a' }, fiber,
     }])
@@ -68,8 +70,24 @@ describe('Host Loader projection', () => {
         quality: 'exact',
         code: 'loader-service-owner',
         sourceId: 'entry-a',
-        explanation: 'The public service registry points to a Fiber owned by this Loader entry.',
+        explanation: 'The public service registry points to a Fiber inside this Loader entry’s lifecycle subtree.',
       },
     }])
+  })
+
+  it('marks ctx.provide effect labels as inferred rather than exact ownership', () => {
+    const relationships = inferServiceRelationships([{
+      effectId: 'effect-1',
+      label: 'ctx.provide("tools")',
+      depth: 0,
+      attribution: { quality: 'exact', code: 'loader-fiber-effect', sourceId: 'entry-a' },
+    }], [{ name: 'tools', status: 'available' }])
+    expect(relationships).toEqual([expect.objectContaining({
+      relationshipId: 'inferred:entry-a->tools',
+      kind: 'provides',
+      fromId: 'entry-a',
+      toId: 'tools',
+      attribution: expect.objectContaining({ quality: 'inferred', code: 'effect-label-service' }),
+    })])
   })
 })

@@ -6,7 +6,7 @@ export type SnapshotHealth = 'healthy' | 'partial' | 'failed';
 /** Collection state of one independently inspected domain. */
 export type DomainStatus = 'ready' | 'partial' | 'unsupported' | 'failed' | 'truncated';
 /** Domain names accepted by a bounded snapshot request. */
-export type SnapshotDomainName = 'plugins' | 'services' | 'effects' | 'tools' | 'prompt';
+export type SnapshotDomainName = 'plugins' | 'services' | 'effects' | 'skills' | 'tools' | 'prompt';
 /** Evidence quality for a source attribution. */
 export type AttributionQuality = 'exact' | 'inferred' | 'unavailable';
 /** A bounded, user-facing diagnostic attached to a snapshot or domain. */
@@ -72,6 +72,15 @@ export interface ToolEntity {
     readonly schemaBytes: number;
     readonly attribution?: SourceAttribution;
 }
+/** One skill visible through the selected Agent's scoped catalog. */
+export interface SkillEntity {
+    readonly name: string;
+    readonly description: string;
+    readonly provider: string;
+    readonly source: string;
+    readonly modelInvocable: boolean;
+    readonly userInvocable: boolean;
+}
 /** One ordered prompt or runtime-context item. */
 export interface PromptEntity {
     readonly name: string;
@@ -123,6 +132,8 @@ export interface SessionSnapshotInput {
     readonly promptToolCount?: number;
     readonly promptToolSchemaBytes?: number;
     readonly runtimeContextSuppressed?: boolean;
+    readonly skillCatalogComplete?: boolean;
+    readonly skills?: SnapshotDomainInput<SkillEntity>;
     readonly tools: SnapshotDomainInput<ToolEntity>;
     readonly prompt: SnapshotDomainInput<PromptEntity>;
 }
@@ -137,6 +148,8 @@ export interface SessionSnapshot {
     readonly promptToolCount?: number;
     readonly promptToolSchemaBytes?: number;
     readonly runtimeContextSuppressed?: boolean;
+    readonly skillCatalogComplete?: boolean;
+    readonly skills?: SnapshotDomain<SkillEntity>;
     readonly tools: SnapshotDomain<ToolEntity>;
     readonly prompt: SnapshotDomain<PromptEntity>;
 }

@@ -10,7 +10,7 @@ export type SnapshotHealth = 'healthy' | 'partial' | 'failed'
 export type DomainStatus = 'ready' | 'partial' | 'unsupported' | 'failed' | 'truncated'
 
 /** Domain names accepted by a bounded snapshot request. */
-export type SnapshotDomainName = 'plugins' | 'services' | 'effects' | 'tools' | 'prompt'
+export type SnapshotDomainName = 'plugins' | 'services' | 'effects' | 'skills' | 'tools' | 'prompt'
 
 /** Evidence quality for a source attribution. */
 export type AttributionQuality = 'exact' | 'inferred' | 'unavailable'
@@ -87,6 +87,16 @@ export interface ToolEntity {
   readonly attribution?: SourceAttribution
 }
 
+/** One skill visible through the selected Agent's scoped catalog. */
+export interface SkillEntity {
+  readonly name: string
+  readonly description: string
+  readonly provider: string
+  readonly source: string
+  readonly modelInvocable: boolean
+  readonly userInvocable: boolean
+}
+
 /** One ordered prompt or runtime-context item. */
 export interface PromptEntity {
   readonly name: string
@@ -144,6 +154,8 @@ export interface SessionSnapshotInput {
   readonly promptToolCount?: number
   readonly promptToolSchemaBytes?: number
   readonly runtimeContextSuppressed?: boolean
+  readonly skillCatalogComplete?: boolean
+  readonly skills?: SnapshotDomainInput<SkillEntity>
   readonly tools: SnapshotDomainInput<ToolEntity>
   readonly prompt: SnapshotDomainInput<PromptEntity>
 }
@@ -159,6 +171,8 @@ export interface SessionSnapshot {
   readonly promptToolCount?: number
   readonly promptToolSchemaBytes?: number
   readonly runtimeContextSuppressed?: boolean
+  readonly skillCatalogComplete?: boolean
+  readonly skills?: SnapshotDomain<SkillEntity>
   readonly tools: SnapshotDomain<ToolEntity>
   readonly prompt: SnapshotDomain<PromptEntity>
 }
@@ -256,6 +270,15 @@ export function normalizeSnapshot(input: SnapshotInput): RuntimeSnapshot {
     ...input.session.promptToolCount === undefined ? {} : { promptToolCount: input.session.promptToolCount },
     ...input.session.promptToolSchemaBytes === undefined ? {} : { promptToolSchemaBytes: input.session.promptToolSchemaBytes },
     ...input.session.runtimeContextSuppressed === undefined ? {} : { runtimeContextSuppressed: input.session.runtimeContextSuppressed },
+    ...input.session.skillCatalogComplete === undefined ? {} : { skillCatalogComplete: input.session.skillCatalogComplete },
+    ...input.session.skills === undefined ? {} : { skills: normalizeDomain(input.session.skills, item => ({
+      name: item.name,
+      description: item.description,
+      provider: item.provider,
+      source: item.source,
+      modelInvocable: item.modelInvocable,
+      userInvocable: item.userInvocable,
+    }), compareSkill) },
     tools: normalizeDomain(input.session.tools, item => ({
       name: item.name,
       schemaBytes: item.schemaBytes,
@@ -281,13 +304,13 @@ export function normalizeSnapshot(input: SnapshotInput): RuntimeSnapshot {
     host.plugins.status,
     host.services.status,
     host.effects.status,
-    ...session === undefined ? [] : [session.tools.status, session.prompt.status],
+    ...session === undefined ? [] : [session.services.status, ...session.skills === undefined ? [] : [session.skills.status], session.tools.status, session.prompt.status],
   ]
   const domainDiagnostics = [
     ...host.plugins.diagnostics,
     ...host.services.diagnostics,
     ...host.effects.diagnostics,
-    ...session === undefined ? [] : [...session.tools.diagnostics, ...session.prompt.diagnostics],
+    ...session === undefined ? [] : [...session.services.diagnostics, ...session.skills?.diagnostics ?? [], ...session.tools.diagnostics, ...session.prompt.diagnostics],
   ]
   const hasFailure = statuses.some(status => status === 'failed') || domainDiagnostics.some(item => item.severity === 'error')
   const hasBlockingDiagnostic = diagnostics.some(item => item.severity !== 'info') || domainDiagnostics.some(item => item.severity !== 'info')
@@ -386,6 +409,10 @@ function compareService(left: ServiceEntity, right: ServiceEntity): number {
 
 function compareTool(left: ToolEntity, right: ToolEntity): number {
   return compareText(left.name, right.name)
+}
+
+function compareSkill(left: SkillEntity, right: SkillEntity): number {
+  return compareText(left.name, right.name) || compareText(left.provider, right.provider)
 }
 
 function comparePrompt(left: PromptEntity, right: PromptEntity): number {

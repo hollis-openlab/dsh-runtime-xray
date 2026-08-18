@@ -12,7 +12,7 @@ export interface RuntimeXrayConfig {
     readonly maxEffectDepth: number;
     readonly deadlineMs: number;
 }
-export { projectFiberEffects, projectLoaderEntries, projectServiceEntities } from './host-projection.ts';
+export { inferServiceRelationships, projectFiberEffects, projectLoaderEntries, projectServiceEntities } from './host-projection.ts';
 /** Read-only Host gateway for the first runtime X-Ray vertical slice. */
 export declare class RuntimeXrayGateway extends TypertRemoteService {
     static inject: string[];

@@ -10,6 +10,7 @@ export declare const SNAPSHOT_REQUEST_SCHEMA: z.ZodObject<{
         plugins: "plugins";
         services: "services";
         effects: "effects";
+        skills: "skills";
         tools: "tools";
         prompt: "prompt";
     }>>>;
@@ -99,6 +100,26 @@ export declare const SNAPSHOT_RESPONSE_SCHEMA: z.ZodObject<{
         promptToolCount: z.ZodOptional<z.ZodNumber>;
         promptToolSchemaBytes: z.ZodOptional<z.ZodNumber>;
         runtimeContextSuppressed: z.ZodOptional<z.ZodBoolean>;
+        skillCatalogComplete: z.ZodOptional<z.ZodBoolean>;
+        skills: z.ZodOptional<z.ZodObject<{
+            status: z.ZodEnum<{
+                partial: "partial";
+                failed: "failed";
+                ready: "ready";
+                unsupported: "unsupported";
+                truncated: "truncated";
+            }>;
+            items: z.ZodArray<z.ZodType<unknown, unknown, z.core.$ZodTypeInternals<unknown, unknown>>>;
+            diagnostics: z.ZodArray<z.ZodObject<{
+                code: z.ZodString;
+                message: z.ZodString;
+                severity: z.ZodOptional<z.ZodEnum<{
+                    info: "info";
+                    warning: "warning";
+                    error: "error";
+                }>>;
+            }, z.core.$strip>>;
+        }, z.core.$strict>>;
         services: z.ZodObject<{
             status: z.ZodEnum<{
                 partial: "partial";
@@ -227,6 +248,7 @@ export declare const TYPERT_REMOTE: {
                         plugins: "plugins";
                         services: "services";
                         effects: "effects";
+                        skills: "skills";
                         tools: "tools";
                         prompt: "prompt";
                     }>>>;
@@ -322,6 +344,26 @@ export declare const TYPERT_REMOTE: {
                     promptToolCount: z.ZodOptional<z.ZodNumber>;
                     promptToolSchemaBytes: z.ZodOptional<z.ZodNumber>;
                     runtimeContextSuppressed: z.ZodOptional<z.ZodBoolean>;
+                    skillCatalogComplete: z.ZodOptional<z.ZodBoolean>;
+                    skills: z.ZodOptional<z.ZodObject<{
+                        status: z.ZodEnum<{
+                            partial: "partial";
+                            failed: "failed";
+                            ready: "ready";
+                            unsupported: "unsupported";
+                            truncated: "truncated";
+                        }>;
+                        items: z.ZodArray<z.ZodType<unknown, unknown, z.core.$ZodTypeInternals<unknown, unknown>>>;
+                        diagnostics: z.ZodArray<z.ZodObject<{
+                            code: z.ZodString;
+                            message: z.ZodString;
+                            severity: z.ZodOptional<z.ZodEnum<{
+                                info: "info";
+                                warning: "warning";
+                                error: "error";
+                            }>>;
+                        }, z.core.$strip>>;
+                    }, z.core.$strict>>;
                     services: z.ZodObject<{
                         status: z.ZodEnum<{
                             partial: "partial";

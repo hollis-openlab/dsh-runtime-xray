@@ -8,7 +8,7 @@ import type { RuntimeSnapshot, SnapshotRequest } from './snapshot.ts'
 
 const requestSchema = z.object({
   sessionId: z.string().optional(),
-  domains: z.array(z.enum(['plugins', 'services', 'effects', 'tools', 'prompt'])).optional(),
+  domains: z.array(z.enum(['plugins', 'services', 'effects', 'skills', 'tools', 'prompt'])).optional(),
 }).strict()
 
 const diagnosticSchema = z.object({
@@ -33,6 +33,10 @@ const serviceSchema = z.object({
   scopeId: z.string().optional(), realmId: z.string().optional(), attribution: attributionSchema.optional(),
 })
 const toolSchema = z.object({ name: z.string(), schemaBytes: z.number(), attribution: attributionSchema.optional() })
+const skillSchema = z.object({
+  name: z.string(), description: z.string(), provider: z.string(), source: z.string(),
+  modelInvocable: z.boolean(), userInvocable: z.boolean(),
+})
 const promptSchema = z.object({ name: z.string(), position: z.number(), bytes: z.number(), contentHash: z.string(), attribution: attributionSchema.optional() })
 const effectSchema = z.object({ effectId: z.string(), label: z.string(), parentId: z.string().optional(), depth: z.number(), attribution: attributionSchema.optional() })
 const domainSchema = (itemSchema: ZodType) => z.object({
@@ -62,6 +66,7 @@ const snapshotSchema = z.object({
     sessionId: z.string(), status: z.enum(['running', 'idle', 'cold', 'unavailable']),
     preset: z.string().optional(), modelProvider: z.string().optional(), model: z.string().optional(),
     promptToolCount: z.number().optional(), promptToolSchemaBytes: z.number().optional(), runtimeContextSuppressed: z.boolean().optional(),
+    skillCatalogComplete: z.boolean().optional(), skills: domainSchema(skillSchema).optional(),
     services: domainSchema(serviceSchema), tools: domainSchema(toolSchema), prompt: domainSchema(promptSchema),
   }).optional(),
   diagnostics: z.array(diagnosticSchema),
@@ -107,7 +112,7 @@ export const TYPERT_REMOTE = {
         schema: snapshotSchema,
       },
       cancellation: { parameter: 'signal' },
-      sourceLocation: { file: 'src/index.ts', line: 84, column: 3 },
+      sourceLocation: { file: 'src/index.ts', line: 102, column: 3 },
     },
   ],
 } satisfies TypertRemoteContribution
